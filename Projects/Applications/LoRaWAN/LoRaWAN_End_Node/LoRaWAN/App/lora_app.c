@@ -172,7 +172,7 @@ static LmHandlerParams_t LmHandlerParams =
 /**
   * @brief Type of Event to generate application Tx
   */
-static TxEventType_t EventType = TX_ON_TIMER;
+static TxEventType_t EventType = TX_ON_EVENT;  /* Changed to enable button for RS485 test */
 
 /**
   * @brief Timer to handle the application Tx
@@ -312,22 +312,38 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
       /* Note: when "EventType == TX_ON_TIMER" this GPIO is not initialized */
       UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
 
+      /* DEBUG: Toggle LED to confirm button press detected */
+      BSP_LED_Toggle(LED_RED);
+
       /* RS485 Modbus relay toggle test */
       {
         uint8_t rxBuffer[32];
         uint16_t rxLen = 0;
+        RS485_Status_t status;
 
         if (relayState == 0)
         {
-          RS485_TransmitReceive(relayOnCmd, sizeof(relayOnCmd), rxBuffer, &rxLen, 100);
-          relayState = 1;
-          BSP_LED_On(LED_RED);
+          status = RS485_TransmitReceive(relayOnCmd, sizeof(relayOnCmd), rxBuffer, &rxLen, 100);
+          if (status == RS485_OK)
+          {
+            relayState = 1;
+            /* Double blink to show RS485 TX success */
+            BSP_LED_Off(LED_RED);
+            for (volatile int i = 0; i < 100000; i++);
+            BSP_LED_On(LED_RED);
+          }
         }
         else
         {
-          RS485_TransmitReceive(relayOffCmd, sizeof(relayOffCmd), rxBuffer, &rxLen, 100);
-          relayState = 0;
-          BSP_LED_Off(LED_RED);
+          status = RS485_TransmitReceive(relayOffCmd, sizeof(relayOffCmd), rxBuffer, &rxLen, 100);
+          if (status == RS485_OK)
+          {
+            relayState = 0;
+            /* Double blink to show RS485 TX success */
+            BSP_LED_On(LED_RED);
+            for (volatile int i = 0; i < 100000; i++);
+            BSP_LED_Off(LED_RED);
+          }
         }
       }
       break;

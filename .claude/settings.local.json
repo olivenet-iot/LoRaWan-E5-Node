@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(done)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nfeat: Add RS485 Modbus RTU support for LoRaWAN gateway\n\n- Add RS485 driver (rs485.c/h) with half-duplex TX/RX control\n- Configure UART1 for 9600 baud (Modbus standard)\n- Add PA0 as RS485 DE (Direction Enable) pin\n- Disable debug logging to free UART1 for RS485\n- Add button test: toggle Modbus relay on SW1 press\n- Update .project to include rs485.c in build\n\nHardware: Wio-E5 Mini + Waveshare RS485 Board 3.3V\nTarget: Waveshare Modbus RTU 8CH Relay\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git push:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
