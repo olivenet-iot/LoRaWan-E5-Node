@@ -39,7 +39,7 @@
 #include "sys_sensors.h"
 
 /* USER CODE BEGIN Includes */
-
+#include "rs485.h"
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -186,6 +186,13 @@ static UTIL_TIMER_Object_t TxTimer;
 static uint8_t AppDataBuffer[LORAWAN_APP_DATA_BUFFER_MAX_SIZE];
 
 /**
+  * @brief RS485 Modbus test commands for relay control
+  */
+static uint8_t relayOnCmd[]  = {0x01, 0x05, 0x00, 0x00, 0xFF, 0x00, 0x8C, 0x3A};  /* Relay ON */
+static uint8_t relayOffCmd[] = {0x01, 0x05, 0x00, 0x00, 0x00, 0x00, 0xCD, 0xCA};  /* Relay OFF */
+static uint8_t relayState = 0;  /* Track relay state for toggle */
+
+/**
   * @brief User application data structure
   */
 static LmHandlerAppData_t AppData = { 0, 0, AppDataBuffer };
@@ -304,6 +311,25 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     case  BUTTON_SW1_PIN:
       /* Note: when "EventType == TX_ON_TIMER" this GPIO is not initialized */
       UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
+
+      /* RS485 Modbus relay toggle test */
+      {
+        uint8_t rxBuffer[32];
+        uint16_t rxLen = 0;
+
+        if (relayState == 0)
+        {
+          RS485_TransmitReceive(relayOnCmd, sizeof(relayOnCmd), rxBuffer, &rxLen, 100);
+          relayState = 1;
+          BSP_LED_On(LED_RED);
+        }
+        else
+        {
+          RS485_TransmitReceive(relayOffCmd, sizeof(relayOffCmd), rxBuffer, &rxLen, 100);
+          relayState = 0;
+          BSP_LED_Off(LED_RED);
+        }
+      }
       break;
     default:
       break;

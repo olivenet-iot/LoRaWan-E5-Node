@@ -33,7 +33,7 @@
 #include "sys_sensors.h"
 
 /* USER CODE BEGIN Includes */
-
+#include "rs485.h"
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -129,7 +129,7 @@ void SystemApp_Init(void)
 #endif /* LOW_POWER_DISABLE */
 
   /* USER CODE BEGIN SystemApp_Init_2 */
-
+  RS485_Init();
   /* USER CODE END SystemApp_Init_2 */
 }
 

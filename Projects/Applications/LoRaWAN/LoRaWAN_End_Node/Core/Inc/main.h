@@ -62,7 +62,7 @@ void Error_Handler(void);
 #define RTC_PREDIV_S ((1<<RTC_N_PREDIV_S)-1)
 #define RTC_PREDIV_A ((1<<(15-RTC_N_PREDIV_S))-1)
 
-#define USART_BAUDRATE 115200
+#define USART_BAUDRATE 9600
 
 #define LED1_Pin GPIO_PIN_5
 #define LED1_GPIO_Port GPIOB
@@ -82,6 +82,13 @@ void Error_Handler(void);
 
 #define USARTx_TX_Pin GPIO_PIN_7
 #define USARTx_TX_GPIO_Port GPIOB
+
+/* RS485 Direction Control Pin - PA0 (D0 on Wio-E5 Mini) */
+#define RS485_DE_Pin         GPIO_PIN_0
+#define RS485_DE_GPIO_Port   GPIOA
+#define RS485_DE_TX_MODE()   HAL_GPIO_WritePin(RS485_DE_GPIO_Port, RS485_DE_Pin, GPIO_PIN_SET)
+#define RS485_DE_RX_MODE()   HAL_GPIO_WritePin(RS485_DE_GPIO_Port, RS485_DE_Pin, GPIO_PIN_RESET)
+
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */

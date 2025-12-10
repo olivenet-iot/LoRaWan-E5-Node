@@ -428,6 +428,11 @@
 			<locationURI>PARENT-1-PROJECT_LOC/Core/Src/usart_if.c</locationURI>
 		</link>
 		<link>
+			<name>Application/User/Core/rs485.c</name>
+			<type>1</type>
+			<locationURI>PARENT-1-PROJECT_LOC/Core/Src/rs485.c</locationURI>
+		</link>
+		<link>
 			<name>Drivers/BSP/STM32WLxx_LoRa_E5_mini/stm32wlxx_LoRa_E5_mini.c</name>
 			<type>1</type>
 			<locationURI>PARENT-5-PROJECT_LOC/Drivers/BSP/STM32WLxx_LoRa_E5_mini/stm32wlxx_LoRa_E5_mini.c</locationURI>

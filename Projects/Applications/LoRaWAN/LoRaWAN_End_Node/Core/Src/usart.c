@@ -122,7 +122,15 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     HAL_NVIC_SetPriority(USART1_IRQn, 2, 0);
     HAL_NVIC_EnableIRQ(USART1_IRQn);
   /* USER CODE BEGIN USART1_MspInit 1 */
-
+    /* RS485 DE (Driver Enable) pin - PA0 (D0 on Wio-E5 Mini) */
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    GPIO_InitTypeDef GPIO_InitRS485 = {0};
+    GPIO_InitRS485.Pin = RS485_DE_Pin;
+    GPIO_InitRS485.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitRS485.Pull = GPIO_NOPULL;
+    GPIO_InitRS485.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(RS485_DE_GPIO_Port, &GPIO_InitRS485);
+    RS485_DE_RX_MODE();  /* Start in RX mode */
   /* USER CODE END USART1_MspInit 1 */
   }
 }
