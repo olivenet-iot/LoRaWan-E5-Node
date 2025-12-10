@@ -40,6 +40,7 @@
 
 /* USER CODE BEGIN Includes */
 #include "rs485.h"
+#include "modbus.h"
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -186,11 +187,9 @@ static UTIL_TIMER_Object_t TxTimer;
 static uint8_t AppDataBuffer[LORAWAN_APP_DATA_BUFFER_MAX_SIZE];
 
 /**
-  * @brief RS485 Modbus test commands for relay control
+  * @brief Relay state for toggle test
   */
-static uint8_t relayOnCmd[]  = {0x01, 0x05, 0x00, 0x00, 0xFF, 0x00, 0x8C, 0x3A};  /* Relay ON */
-static uint8_t relayOffCmd[] = {0x01, 0x05, 0x00, 0x00, 0x00, 0x00, 0xCD, 0xCA};  /* Relay OFF */
-static uint8_t relayState = 0;  /* Track relay state for toggle */
+static uint8_t relayState = 0;
 
 /**
   * @brief User application data structure
@@ -291,7 +290,13 @@ void LoRaWAN_Init(void)
   }
 
   /* USER CODE BEGIN LoRaWAN_Init_Last */
-
+  /* Enable BOTH periodic timer AND button for RS485 gateway */
+  /* Timer for periodic status uplink */
+  UTIL_TIMER_Create(&TxTimer, 0xFFFFFFFFU, UTIL_TIMER_ONESHOT, OnTxTimerEvent, NULL);
+  UTIL_TIMER_SetPeriod(&TxTimer, APP_TX_DUTYCYCLE);
+  UTIL_TIMER_Start(&TxTimer);
+  /* Button for manual trigger */
+  BSP_PB_Init(BUTTON_SW1, BUTTON_MODE_EXTI);
   /* USER CODE END LoRaWAN_Init_Last */
 }
 
@@ -309,43 +314,9 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   switch (GPIO_Pin)
   {
     case  BUTTON_SW1_PIN:
-      /* Note: when "EventType == TX_ON_TIMER" this GPIO is not initialized */
+      /* Button press: Trigger immediate relay status uplink */
       UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
-
-      /* DEBUG: Toggle LED to confirm button press detected */
       BSP_LED_Toggle(LED_RED);
-
-      /* RS485 Modbus relay toggle test */
-      {
-        uint8_t rxBuffer[32];
-        uint16_t rxLen = 0;
-        RS485_Status_t status;
-
-        if (relayState == 0)
-        {
-          status = RS485_TransmitReceive(relayOnCmd, sizeof(relayOnCmd), rxBuffer, &rxLen, 100);
-          if (status == RS485_OK)
-          {
-            relayState = 1;
-            /* Double blink to show RS485 TX success */
-            BSP_LED_Off(LED_RED);
-            for (volatile int i = 0; i < 100000; i++);
-            BSP_LED_On(LED_RED);
-          }
-        }
-        else
-        {
-          status = RS485_TransmitReceive(relayOffCmd, sizeof(relayOffCmd), rxBuffer, &rxLen, 100);
-          if (status == RS485_OK)
-          {
-            relayState = 0;
-            /* Double blink to show RS485 TX success */
-            BSP_LED_On(LED_RED);
-            for (volatile int i = 0; i < 100000; i++);
-            BSP_LED_Off(LED_RED);
-          }
-        }
-      }
       break;
     default:
       break;
@@ -364,6 +335,10 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
   /* USER CODE BEGIN OnRxData_1 */
   if ((appData != NULL) || (params != NULL))
   {
+    /* Debug: Quick blink to confirm downlink received */
+    BSP_LED_On(LED_RED);
+    HAL_Delay(100);
+    BSP_LED_Off(LED_RED);
 
     UTIL_TIMER_Start(&RxLedTimer);
 
@@ -417,6 +392,39 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
         }
         break;
 
+      case LORAWAN_RS485_PORT:
+        /* RS485 Modbus Relay Control */
+        /* Downlink format: [channel (1-8)] [state (0/1)] */
+        if (appData->BufferSize >= 2)
+        {
+          uint8_t channel = appData->Buffer[0];
+          uint8_t state = appData->Buffer[1];
+
+          Modbus_Status_t status = Modbus_WriteCoil(channel, state);
+
+          if (status == MODBUS_OK)
+          {
+            /* Update LED to reflect relay 1 state only */
+            if (channel == 1)
+            {
+              relayState = state;
+              if (state) BSP_LED_On(LED_RED);
+              else BSP_LED_Off(LED_RED);
+            }
+
+            /* Read current relay states and send uplink response */
+            uint8_t relayStates = 0;
+            if (Modbus_ReadCoils(&relayStates) == MODBUS_OK)
+            {
+              AppData.Port = LORAWAN_RS485_PORT;
+              AppData.Buffer[0] = relayStates;
+              AppData.BufferSize = 1;
+              UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
+            }
+          }
+        }
+        break;
+
       default:
 
         break;
@@ -428,82 +436,45 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
 static void SendTxData(void)
 {
   /* USER CODE BEGIN SendTxData_1 */
-  uint16_t pressure = 0;
-  int16_t temperature = 0;
-  sensor_t sensor_data;
   UTIL_TIMER_Time_t nextTxIn = 0;
 
-#ifdef CAYENNE_LPP
-  uint8_t channel = 0;
-#else
-  uint16_t humidity = 0;
-  uint32_t i = 0;
-  int32_t latitude = 0;
-  int32_t longitude = 0;
-  uint16_t altitudeGps = 0;
-#endif /* CAYENNE_LPP */
-
-  EnvSensors_Read(&sensor_data);
-  temperature = (SYS_GetTemperatureLevel() >> 8);
-  pressure    = (uint16_t)(sensor_data.pressure * 100 / 10);      /* in hPa / 10 */
-
-  AppData.Port = LORAWAN_USER_APP_PORT;
-
-#ifdef CAYENNE_LPP
-  CayenneLppReset();
-  CayenneLppAddBarometricPressure(channel++, pressure);
-  CayenneLppAddTemperature(channel++, temperature);
-  CayenneLppAddRelativeHumidity(channel++, (uint16_t)(sensor_data.humidity));
-
-  if ((LmHandlerParams.ActiveRegion != LORAMAC_REGION_US915) && (LmHandlerParams.ActiveRegion != LORAMAC_REGION_AU915)
-      && (LmHandlerParams.ActiveRegion != LORAMAC_REGION_AS923))
+  /* If AppData is already set for RS485 response, send it directly */
+  if (AppData.Port == LORAWAN_RS485_PORT && AppData.BufferSize > 0)
   {
-    CayenneLppAddDigitalInput(channel++, GetBatteryLevel());
-    CayenneLppAddDigitalOutput(channel++, AppLedStateOn);
+    /* AppData already contains relay states from OnRxData handler */
+    if (LORAMAC_HANDLER_SUCCESS == LmHandlerSend(&AppData, LORAWAN_DEFAULT_CONFIRMED_MSG_STATE, &nextTxIn, false))
+    {
+      APP_LOG(TS_ON, VLEVEL_L, "RS485 RESPONSE UPLINK\r\n");
+    }
+    /* Reset AppData for normal operation */
+    AppData.Port = LORAWAN_USER_APP_PORT;
+    AppData.BufferSize = 0;
+    return;
   }
 
-  CayenneLppCopy(AppData.Buffer);
-  AppData.BufferSize = CayenneLppGetSize();
-#else  /* not CAYENNE_LPP */
-  humidity    = (uint16_t)(sensor_data.humidity * 10);            /* in %*10     */
+  /* Periodic uplink: Read and send relay status */
+  uint8_t relayStates = 0;
+  Modbus_Status_t modbusStatus = Modbus_ReadCoils(&relayStates);
 
-  AppData.Buffer[i++] = AppLedStateOn;
-  AppData.Buffer[i++] = (uint8_t)((pressure >> 8) & 0xFF);
-  AppData.Buffer[i++] = (uint8_t)(pressure & 0xFF);
-  AppData.Buffer[i++] = (uint8_t)(temperature & 0xFF);
-  AppData.Buffer[i++] = (uint8_t)((humidity >> 8) & 0xFF);
-  AppData.Buffer[i++] = (uint8_t)(humidity & 0xFF);
-
-  if ((LmHandlerParams.ActiveRegion == LORAMAC_REGION_US915) || (LmHandlerParams.ActiveRegion == LORAMAC_REGION_AU915)
-      || (LmHandlerParams.ActiveRegion == LORAMAC_REGION_AS923))
+  if (modbusStatus == MODBUS_OK)
   {
-    AppData.Buffer[i++] = 0;
-    AppData.Buffer[i++] = 0;
-    AppData.Buffer[i++] = 0;
-    AppData.Buffer[i++] = 0;
+    AppData.Port = LORAWAN_RS485_PORT;
+    AppData.Buffer[0] = relayStates;
+    AppData.BufferSize = 1;
   }
   else
   {
-    latitude = sensor_data.latitude;
-    longitude = sensor_data.longitude;
-
-    AppData.Buffer[i++] = GetBatteryLevel();        /* 1 (very low) to 254 (fully charged) */
-    AppData.Buffer[i++] = (uint8_t)((latitude >> 16) & 0xFF);
-    AppData.Buffer[i++] = (uint8_t)((latitude >> 8) & 0xFF);
-    AppData.Buffer[i++] = (uint8_t)(latitude & 0xFF);
-    AppData.Buffer[i++] = (uint8_t)((longitude >> 16) & 0xFF);
-    AppData.Buffer[i++] = (uint8_t)((longitude >> 8) & 0xFF);
-    AppData.Buffer[i++] = (uint8_t)(longitude & 0xFF);
-    AppData.Buffer[i++] = (uint8_t)((altitudeGps >> 8) & 0xFF);
-    AppData.Buffer[i++] = (uint8_t)(altitudeGps & 0xFF);
+    /* If Modbus read fails, send error indicator */
+    AppData.Port = LORAWAN_RS485_PORT;
+    AppData.Buffer[0] = 0xFF;  /* 0xFF indicates error */
+    AppData.BufferSize = 1;
   }
-
-  AppData.BufferSize = i;
-#endif /* CAYENNE_LPP */
 
   if (LORAMAC_HANDLER_SUCCESS == LmHandlerSend(&AppData, LORAWAN_DEFAULT_CONFIRMED_MSG_STATE, &nextTxIn, false))
   {
-    APP_LOG(TS_ON, VLEVEL_L, "SEND REQUEST\r\n");
+    APP_LOG(TS_ON, VLEVEL_L, "RS485 STATUS UPLINK\r\n");
+    /* Toggle LED to show uplink sent */
+    BSP_LED_Toggle(LED_RED);
   }
   else if (nextTxIn > 0)
   {

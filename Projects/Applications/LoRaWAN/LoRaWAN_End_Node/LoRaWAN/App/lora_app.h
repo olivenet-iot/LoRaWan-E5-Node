@@ -50,7 +50,7 @@ extern "C" {
 /*!
  * Defines the application data transmission duty cycle. 10s, value in [ms].
  */
-#define APP_TX_DUTYCYCLE                            30000
+#define APP_TX_DUTYCYCLE                            60000  /* 60 seconds */
 
 /*!
  * LoRaWAN User application port
@@ -67,7 +67,7 @@ extern "C" {
 /*!
  * LoRaWAN default endNode class port
  */
-#define LORAWAN_DEFAULT_CLASS                       CLASS_A
+#define LORAWAN_DEFAULT_CLASS                       CLASS_C  /* Changed for continuous RX */
 
 /*!
  * LoRaWAN default confirm state
@@ -105,7 +105,10 @@ extern "C" {
 #define LORAWAN_DEFAULT_PING_SLOT_PERIODICITY       4
 
 /* USER CODE BEGIN EC */
-
+/*!
+ * LoRaWAN RS485 Modbus port for relay control
+ */
+#define LORAWAN_RS485_PORT                          10
 /* USER CODE END EC */
 
 /* Exported macro ------------------------------------------------------------*/
