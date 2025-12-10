@@ -1,9 +1,13 @@
 /**
  * @file modbus.c
- * @brief Modbus RTU protocol implementation
+ * @brief Modbus RTU protocol implementation - Production grade with retry
  */
 
 #include "modbus.h"
+
+/* Retry configuration */
+#define MODBUS_RETRY_COUNT      3
+#define MODBUS_RETRY_DELAY_MS   50
 
 /**
  * @brief Calculate Modbus CRC16
@@ -35,7 +39,7 @@ uint16_t Modbus_CRC16(uint8_t *data, uint16_t length)
 }
 
 /**
- * @brief Write single coil (control one relay)
+ * @brief Write single coil (control one relay) with retry mechanism
  * @param channel: Relay channel (1-8)
  * @param state: 0=OFF, 1=ON
  * @return Modbus_Status_t
@@ -65,32 +69,43 @@ Modbus_Status_t Modbus_WriteCoil(uint8_t channel, uint8_t state)
     txBuffer[6] = crc & 0xFF;                  /* CRC low byte */
     txBuffer[7] = (crc >> 8) & 0xFF;           /* CRC high byte */
 
-    /* Send command and receive response */
-    RS485_Status_t rs485Status = RS485_TransmitReceive(txBuffer, 8, rxBuffer, &rxLen, MODBUS_TIMEOUT_MS);
-
-    if (rs485Status != RS485_OK || rxLen < 8)
+    /* Retry loop */
+    for (uint8_t retry = 0; retry < MODBUS_RETRY_COUNT; retry++)
     {
-        return MODBUS_ERROR_TIMEOUT;
+        RS485_Status_t rs485Status = RS485_TransmitReceive(txBuffer, 8, rxBuffer, &rxLen, MODBUS_TIMEOUT_MS);
+
+        if (rs485Status != RS485_OK || rxLen < 8)
+        {
+            /* Communication error, retry after delay */
+            HAL_Delay(MODBUS_RETRY_DELAY_MS);
+            continue;
+        }
+
+        /* Verify response CRC */
+        crc = Modbus_CRC16(rxBuffer, 6);
+        if (rxBuffer[6] != (crc & 0xFF) || rxBuffer[7] != ((crc >> 8) & 0xFF))
+        {
+            /* CRC error, retry */
+            HAL_Delay(MODBUS_RETRY_DELAY_MS);
+            continue;
+        }
+
+        /* Verify echo (write coil echoes the command) */
+        if (rxBuffer[0] == txBuffer[0] && rxBuffer[1] == txBuffer[1] &&
+            rxBuffer[2] == txBuffer[2] && rxBuffer[3] == txBuffer[3])
+        {
+            return MODBUS_OK;
+        }
+
+        /* Response mismatch, retry */
+        HAL_Delay(MODBUS_RETRY_DELAY_MS);
     }
 
-    /* Verify response CRC */
-    crc = Modbus_CRC16(rxBuffer, 6);
-    if (rxBuffer[6] != (crc & 0xFF) || rxBuffer[7] != ((crc >> 8) & 0xFF))
-    {
-        return MODBUS_ERROR_CRC;
-    }
-
-    /* Verify echo (write coil echoes the command) */
-    if (rxBuffer[0] != txBuffer[0] || rxBuffer[1] != txBuffer[1])
-    {
-        return MODBUS_ERROR_RESPONSE;
-    }
-
-    return MODBUS_OK;
+    return MODBUS_ERROR_TIMEOUT;
 }
 
 /**
- * @brief Read all coil states (all 8 relays)
+ * @brief Read all coil states (all 8 relays) with retry mechanism
  * @param relayStates: Pointer to store relay states as bitmask
  * @return Modbus_Status_t
  */
@@ -114,24 +129,39 @@ Modbus_Status_t Modbus_ReadCoils(uint8_t *relayStates)
     txBuffer[6] = crc & 0xFF;
     txBuffer[7] = (crc >> 8) & 0xFF;
 
-    /* Send command and receive response */
-    RS485_Status_t rs485Status = RS485_TransmitReceive(txBuffer, 8, rxBuffer, &rxLen, MODBUS_TIMEOUT_MS);
-
-    if (rs485Status != RS485_OK || rxLen < 5)
+    /* Retry loop */
+    for (uint8_t retry = 0; retry < MODBUS_RETRY_COUNT; retry++)
     {
-        return MODBUS_ERROR_TIMEOUT;
+        RS485_Status_t rs485Status = RS485_TransmitReceive(txBuffer, 8, rxBuffer, &rxLen, MODBUS_TIMEOUT_MS);
+
+        if (rs485Status != RS485_OK || rxLen < 5)
+        {
+            /* Communication error, retry after delay */
+            HAL_Delay(MODBUS_RETRY_DELAY_MS);
+            continue;
+        }
+
+        /* Response format: [addr][fc][byte_count][data][crc_lo][crc_hi] */
+        /* Verify response CRC */
+        crc = Modbus_CRC16(rxBuffer, rxLen - 2);
+        if (rxBuffer[rxLen-2] != (crc & 0xFF) || rxBuffer[rxLen-1] != ((crc >> 8) & 0xFF))
+        {
+            /* CRC error, retry */
+            HAL_Delay(MODBUS_RETRY_DELAY_MS);
+            continue;
+        }
+
+        /* Verify response header */
+        if (rxBuffer[0] == MODBUS_SLAVE_ADDR && rxBuffer[1] == MODBUS_FC_READ_COILS)
+        {
+            /* Extract relay states (byte 3 contains the coil data) */
+            *relayStates = rxBuffer[3];
+            return MODBUS_OK;
+        }
+
+        /* Response mismatch, retry */
+        HAL_Delay(MODBUS_RETRY_DELAY_MS);
     }
 
-    /* Response format: [addr][fc][byte_count][data][crc_lo][crc_hi] */
-    /* Verify response CRC */
-    crc = Modbus_CRC16(rxBuffer, rxLen - 2);
-    if (rxBuffer[rxLen-2] != (crc & 0xFF) || rxBuffer[rxLen-1] != ((crc >> 8) & 0xFF))
-    {
-        return MODBUS_ERROR_CRC;
-    }
-
-    /* Extract relay states (byte 3 contains the coil data) */
-    *relayStates = rxBuffer[3];
-
-    return MODBUS_OK;
+    return MODBUS_ERROR_TIMEOUT;
 }

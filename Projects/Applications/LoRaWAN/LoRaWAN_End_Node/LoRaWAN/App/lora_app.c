@@ -420,8 +420,8 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
               }
             }
 
-            /* Small delay between commands for Modbus stability */
-            HAL_Delay(50);
+            /* Delay between commands for Modbus stability */
+            HAL_Delay(100);
           }
 
           /* Send uplink response with current relay states */

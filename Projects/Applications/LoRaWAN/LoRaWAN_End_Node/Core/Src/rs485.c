@@ -1,6 +1,6 @@
 /**
  * @file rs485.c
- * @brief RS485 Half-duplex driver implementation
+ * @brief RS485 Half-duplex driver implementation - Production grade
  */
 
 #include "rs485.h"
@@ -10,17 +10,29 @@
 static uint8_t rs485RxBuffer[RS485_RX_BUFFER_SIZE];
 
 /**
+ * @brief Flush UART RX buffer to clear stale data
+ */
+static void RS485_FlushRx(void)
+{
+    uint8_t dummy;
+    /* Read any pending bytes with short timeout */
+    while (HAL_UART_Receive(&huart1, &dummy, 1, 5) == HAL_OK);
+}
+
+/**
  * @brief Initialize RS485 interface
- * @note  UART1 and PA8 GPIO are already initialized in usart.c
+ * @note  UART1 and PA0 GPIO are already initialized in usart.c
  */
 void RS485_Init(void)
 {
     /* Ensure we start in RX mode */
     RS485_DE_RX_MODE();
+    /* Flush any stale data */
+    RS485_FlushRx();
 }
 
 /**
- * @brief Transmit data over RS485
+ * @brief Transmit data over RS485 with proper timing
  * @param data: Pointer to data buffer
  * @param length: Number of bytes to transmit
  * @return RS485_Status_t
@@ -29,29 +41,49 @@ RS485_Status_t RS485_Transmit(uint8_t *data, uint16_t length)
 {
     HAL_StatusTypeDef status;
 
+    /* Flush any pending RX data */
+    RS485_FlushRx();
+
     /* Switch to TX mode */
     RS485_DE_TX_MODE();
 
-    /* Small delay for DE pin settling (10us equivalent) */
-    for (volatile int i = 0; i < 100; i++);
+    /* Wait for DE pin to settle (100us minimum) */
+    HAL_Delay(1);
 
     /* Transmit data (blocking) */
     status = HAL_UART_Transmit(&huart1, data, length, RS485_TX_TIMEOUT_MS);
 
-    /* Wait for transmission complete (shift register empty) */
-    while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_TC) == RESET);
+    if (status != HAL_OK)
+    {
+        RS485_DE_RX_MODE();
+        return RS485_ERROR_TX;
+    }
 
-    /* Small delay before switching back to RX */
-    for (volatile int i = 0; i < 100; i++);
+    /* Wait for transmission complete (shift register empty) */
+    uint32_t tickstart = HAL_GetTick();
+    while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_TC) == RESET)
+    {
+        if ((HAL_GetTick() - tickstart) > RS485_TX_TIMEOUT_MS)
+        {
+            RS485_DE_RX_MODE();
+            return RS485_ERROR_TX;
+        }
+    }
+
+    /* Additional delay for last byte to fully transmit */
+    HAL_Delay(2);
 
     /* Switch back to RX mode */
     RS485_DE_RX_MODE();
 
-    return (status == HAL_OK) ? RS485_OK : RS485_ERROR_TX;
+    /* Small delay for bus turnaround */
+    HAL_Delay(1);
+
+    return RS485_OK;
 }
 
 /**
- * @brief Receive data from RS485
+ * @brief Receive data from RS485 with improved timeout handling
  * @param buffer: Pointer to receive buffer
  * @param length: Pointer to store received length
  * @param timeout_ms: Receive timeout in milliseconds
@@ -59,26 +91,47 @@ RS485_Status_t RS485_Transmit(uint8_t *data, uint16_t length)
  */
 RS485_Status_t RS485_Receive(uint8_t *buffer, uint16_t *length, uint32_t timeout_ms)
 {
-    HAL_StatusTypeDef status;
     uint16_t rxCount = 0;
     uint32_t startTick = HAL_GetTick();
+    uint32_t lastByteTick = startTick;
 
     /* Ensure we're in RX mode */
     RS485_DE_RX_MODE();
 
-    /* Receive bytes until timeout or buffer full */
-    while ((HAL_GetTick() - startTick) < timeout_ms && rxCount < RS485_RX_BUFFER_SIZE)
+    /* Wait for first byte with full timeout */
+    while ((HAL_GetTick() - startTick) < timeout_ms)
     {
-        status = HAL_UART_Receive(&huart1, &buffer[rxCount], 1, 10);
-        if (status == HAL_OK)
+        if (HAL_UART_Receive(&huart1, &buffer[rxCount], 1, 10) == HAL_OK)
         {
             rxCount++;
-            startTick = HAL_GetTick();  /* Reset timeout on each byte received */
+            lastByteTick = HAL_GetTick();
+            break;
+        }
+    }
+
+    if (rxCount == 0)
+    {
+        *length = 0;
+        return RS485_ERROR_TIMEOUT;
+    }
+
+    /* Continue receiving with inter-byte timeout (50ms for Modbus) */
+    while (rxCount < RS485_RX_BUFFER_SIZE)
+    {
+        if (HAL_UART_Receive(&huart1, &buffer[rxCount], 1, 10) == HAL_OK)
+        {
+            rxCount++;
+            lastByteTick = HAL_GetTick();
+        }
+        else if ((HAL_GetTick() - lastByteTick) > 50)
+        {
+            /* No byte received for 50ms - frame complete */
+            break;
         }
     }
 
     *length = rxCount;
-    return (rxCount > 0) ? RS485_OK : RS485_ERROR_TIMEOUT;
+    return RS485_OK;
 }
 
 /**
@@ -102,9 +155,6 @@ RS485_Status_t RS485_TransmitReceive(uint8_t *txData, uint16_t txLength,
     {
         return status;
     }
-
-    /* Small inter-frame delay (3.5 char times at 9600 = ~4ms) */
-    HAL_Delay(5);
 
     /* Receive response */
     status = RS485_Receive(rxBuffer, rxLength, rxTimeout_ms);
