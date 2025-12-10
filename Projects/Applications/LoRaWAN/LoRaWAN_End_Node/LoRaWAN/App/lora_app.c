@@ -335,11 +335,6 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
   /* USER CODE BEGIN OnRxData_1 */
   if ((appData != NULL) || (params != NULL))
   {
-    /* Debug: Quick blink to confirm downlink received */
-    BSP_LED_On(LED_RED);
-    HAL_Delay(100);
-    BSP_LED_Off(LED_RED);
-
     UTIL_TIMER_Start(&RxLedTimer);
 
     static const char *slotStrings[] = { "1", "2", "C", "C Multicast", "B Ping-Slot", "B Multicast Ping-Slot" };
@@ -393,26 +388,45 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
         break;
 
       case LORAWAN_RS485_PORT:
-        /* RS485 Modbus Relay Control */
-        /* Downlink format: [channel (1-8)] [state (0/1)] */
-        if (appData->BufferSize >= 2)
+        /* RS485 Modbus Relay Control - Multi-channel support */
+        /* Downlink format: [ch1][state1][ch2][state2]... (2 bytes per relay) */
+        if (appData->BufferSize >= 2 && (appData->BufferSize % 2) == 0)
         {
-          uint8_t channel = appData->Buffer[0];
-          uint8_t state = appData->Buffer[1];
+          uint8_t numCommands = appData->BufferSize / 2;
+          uint8_t successCount = 0;
 
-          Modbus_Status_t status = Modbus_WriteCoil(channel, state);
-
-          if (status == MODBUS_OK)
+          /* Process each channel/state pair */
+          for (uint8_t i = 0; i < numCommands; i++)
           {
-            /* Update LED to reflect relay 1 state only */
-            if (channel == 1)
+            uint8_t channel = appData->Buffer[i * 2];
+            uint8_t state = appData->Buffer[i * 2 + 1];
+
+            /* Validate channel (1-8) */
+            if (channel >= 1 && channel <= 8)
             {
-              relayState = state;
-              if (state) BSP_LED_On(LED_RED);
-              else BSP_LED_Off(LED_RED);
+              Modbus_Status_t status = Modbus_WriteCoil(channel, state);
+
+              if (status == MODBUS_OK)
+              {
+                successCount++;
+
+                /* Update LED for channel 1 only */
+                if (channel == 1)
+                {
+                  relayState = state;
+                  if (state) BSP_LED_On(LED_RED);
+                  else BSP_LED_Off(LED_RED);
+                }
+              }
             }
 
-            /* Read current relay states and send uplink response */
+            /* Small delay between commands for Modbus stability */
+            HAL_Delay(50);
+          }
+
+          /* Send uplink response with current relay states */
+          if (successCount > 0)
+          {
             uint8_t relayStates = 0;
             if (Modbus_ReadCoils(&relayStates) == MODBUS_OK)
             {
